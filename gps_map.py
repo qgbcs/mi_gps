@@ -12,7 +12,9 @@ import argparse
 import json
 import os
 import sys
+import threading
 import time
+import urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MULTI_MQTT = os.environ.get("MULTI_MQTT_DIR", r"C:\test\github\multi_mqtt")
@@ -30,7 +32,18 @@ import server_http  # noqa: E402  (复用 multi_mqtt 的 HTTP RPC 服务器)
 MAP_HTML = os.path.join(HERE, "map.html")
 STATE = {"device": None, "topic": None, "key": None, "timeout": 8.0, "use_mi": False,
          "cache": None, "cache_ts": 0.0, "cache_sec": 5.0}
-_lock = __import__("threading").Lock()
+_lock = threading.Lock()
+
+# ---- 地图瓦片磁盘缓存 ----
+# 页面不再直连高德，而是走 /tile(p)?z=&x=&y= 本地代理：首次回源并落盘，
+# 之后直接读文件，缩放/刷新都不再依赖外网。
+TILE_DIR = os.path.join(HERE, "tiles")
+TILE_URL = ("https://webrd0{s}.is.autonavi.com/appmaptile"
+            "?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}")
+TILE_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+           "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+_tile_lock = threading.Lock()
+_tile_stats = {"ts": 0.0, "data": None}
 
 
 def _safe(fn, *a, **kw):
@@ -74,6 +87,8 @@ def build_payload(force=False):
                     "expires_at": _fmt_ms((cred.get("expires_at") or 0) * 1000) if cred.get("expires_at") else None},
         "delta": {},
     }
+    tiles, tiles_err = _safe(tile_stats)
+    out["tiles"] = tiles if tiles is not None else {"error": tiles_err}
 
     if dev:
         g = dev.get("gps") or {}
@@ -138,6 +153,127 @@ def build_payload(force=False):
         STATE["cache"] = out
         STATE["cache_ts"] = now
     return out
+
+
+def _tile_file(z, x, y):
+    return os.path.join(TILE_DIR, str(z), str(x), "%d.png" % y)
+
+
+def _fetch_tile(z, x, y):
+    """回源高德（4 个子域轮询），失败抛异常由调用方降级。"""
+    import requests
+    last = None
+    for sub in "1234":
+        try:
+            r = requests.get(TILE_URL.format(s=sub, z=z, x=x, y=y),
+                             headers={"User-Agent": TILE_UA,
+                                      "Referer": "https://www.amap.com/"}, timeout=8)
+            if r.status_code == 200 and r.content:
+                return r.content
+            last = "HTTP %s" % r.status_code
+        except Exception as exc:  # 单个子域失败继续换下一个
+            last = "%s: %s" % (type(exc).__name__, exc)
+    raise RuntimeError(last or "瓦片下载失败")
+
+
+def _write_tile(z, x, y, buf):
+    path = _tile_file(z, x, y)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = "%s.%d.tmp" % (path, threading.get_ident())
+    with open(tmp, "wb") as fp:
+        fp.write(buf)
+    os.replace(tmp, path)
+
+
+def tile(p):
+    """瓦片代理 + 本地磁盘缓存：/tile(p)?z=&x=&y=
+
+    命中缓存直接读盘秒出；未命中才回源并落盘。响应带 30 天 Cache-Control，
+    浏览器端第二次也不需要再请求。
+    """
+    query = urllib.parse.parse_qs(p.handler.path.partition("?")[2])
+    try:
+        z, x, y = (int(query["z"][0]), int(query["x"][0]), int(query["y"][0]))
+        if z < 0 or x < 0 or y < 0:
+            raise ValueError("negative tile index")
+    except (KeyError, IndexError, ValueError):
+        p.set_status(400)
+        p.set_data(b"")
+        return
+
+    try:
+        with open(_tile_file(z, x, y), "rb") as fp:
+            buf, hit = fp.read(), True
+    except OSError:
+        buf, hit = None, False
+    if not hit:
+        try:
+            buf = _fetch_tile(z, x, y)
+            _write_tile(z, x, y, buf)
+        except Exception:
+            p.set_status(502)
+            p.set_data(b"")
+            return
+        with _tile_lock:
+            _tile_stats["data"] = None   # 有新瓦片落盘，下次统计重新扫描
+
+    p.set_header("Content-Type", "image/png")
+    p.set_header("Cache-Control", "public, max-age=2592000")
+    p.set_header("X-Tile-Cache", "hit" if hit else "miss")
+    p.set_data(buf)
+
+
+def _fmt_bytes(n):
+    units = ("B", "KB", "MB", "GB")
+    value, index = float(n or 0), 0
+    while value >= 1024 and index < len(units) - 1:
+        value /= 1024.0
+        index += 1
+    return ("%d %s" % (value, units[index])) if index == 0 else ("%.1f %s" % (value, units[index]))
+
+
+def tile_stats(force=False):
+    """统计各缩放层级的缓存瓦片数量与文件总大小（10 秒缓存，避免频繁扫盘）。"""
+    now = time.time()
+    with _tile_lock:
+        if not force and _tile_stats["data"] and now - _tile_stats["ts"] < 10:
+            return _tile_stats["data"]
+
+    levels, count, total = {}, 0, 0
+    try:
+        zooms = sorted(int(name) for name in os.listdir(TILE_DIR) if name.isdigit())
+    except OSError:
+        zooms = []
+    for z in zooms:
+        zc = zs = 0
+        try:
+            xdirs = os.listdir(os.path.join(TILE_DIR, str(z)))
+        except OSError:
+            continue
+        for xd in xdirs:
+            xpath = os.path.join(TILE_DIR, str(z), xd)
+            try:
+                names = os.listdir(xpath)
+            except OSError:
+                continue
+            for name in names:
+                if not name.endswith(".png"):
+                    continue
+                try:
+                    zs += os.path.getsize(os.path.join(xpath, name))
+                except OSError:
+                    continue
+                zc += 1
+        if zc:
+            levels[str(z)] = {"count": zc, "bytes": zs}
+            count += zc
+            total += zs
+
+    data = {"levels": levels, "count": count, "bytes": total,
+            "bytes_text": _fmt_bytes(total), "dir": TILE_DIR}
+    with _tile_lock:
+        _tile_stats.update(ts=now, data=data)
+    return data
 
 
 def map_html(p):

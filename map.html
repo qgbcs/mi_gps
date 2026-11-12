@@ -127,6 +127,14 @@
       </table>
     </div>
     <div class="card">
+      <h2>地图瓦片缓存 <span class="badge" id="tileState">--</span></h2>
+      <dl class="kv" id="tileKv"></dl>
+      <table style="margin-top:6px">
+        <thead><tr><th>层级</th><th>张数</th><th>大小</th></tr></thead>
+        <tbody id="tileTbl"></tbody>
+      </table>
+    </div>
+    <div class="card">
       <h2>为什么会有偏差</h2>
       <div class="note">
         <p><b>1. 坐标系不同（约 500 m）</b>　手机 gps.txt 是 <b>WGS-84</b>；i.mi.com 网页用百度地图，展示 <b>BD-09</b>，接口 "autonavi" 字段是 <b>GCJ-02</b>。国内地图必须做 WGS→GCJ→BD 偏移。</p>
@@ -147,8 +155,9 @@ let fitted = false;   // 只在首屏自动定位一次，之后用户拖动/缩
 
 function initMap(){
   map = L.map('map', {zoomControl:true, attributionControl:true}).setView([28.26,112.95], 14);
-  L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
-    {subdomains:'1234', maxZoom:18, attribution:'底图 © 高德地图 (GCJ-02)'}).addTo(map);
+  // 走本地代理：/tile(p) 首次回源并落盘，之后读盘秒出（含 30 天 Cache-Control）
+  L.tileLayer('/tile(p)?z={z}&x={x}&y={y}',
+    {maxZoom:18, attribution:'底图 © 高德地图 (GCJ-02) · 本地缓存'}).addTo(map);
   layerMi = L.layerGroup().addTo(map);
   layerMq = L.layerGroup().addTo(map);
   layerRaw = L.layerGroup();
@@ -177,6 +186,11 @@ function arrowIcon(deg){
 
 function fmt(v, n=6){ return (v==null||isNaN(v)) ? '--' : Number(v).toFixed(n); }
 function esc(s){ return String(s==null?'':s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function fmtBytes(n){
+  const u = ['B','KB','MB','GB']; let v = Number(n||0), i = 0;
+  while (v >= 1024 && i < u.length-1){ v /= 1024; i++; }
+  return (i ? v.toFixed(1) : v) + ' ' + u[i];
+}
 function kv(el, rows){ el.innerHTML = rows.map(([k,v])=>`<dt>${k}</dt><dd>${v}</dd>`).join(''); }
 
 function render(d){
@@ -263,6 +277,27 @@ function render(d){
   }
   $('tbl').innerHTML = rows.length ? rows.map(r=>`<tr><td>${r[0]}</td><td class="mono">${fmt(r[1])}</td><td class="mono">${fmt(r[2])}</td></tr>`).join('')
                                   : '<tr><td colspan="3" class="muted">--</td></tr>';
+
+  // 地图瓦片缓存统计
+  const t = d.tiles || {};
+  const ts = $('tileState');
+  if (t.error){
+    ts.textContent = '失败'; ts.className = 'badge off';
+    kv($('tileKv'), [['错误', `<span class="err">${esc(t.error)}</span>`]]);
+    $('tileTbl').innerHTML = '';
+  } else {
+    const lv = t.levels || {};
+    const zs = Object.keys(lv).sort((a,b)=>a-b);
+    ts.textContent = (t.count||0) + ' 张'; ts.className = 'badge on';
+    kv($('tileKv'), [
+      ['文件总大小', esc(t.bytes_text||'0 B')],
+      ['覆盖层级', zs.length ? zs.join(' / ') : '--'],
+      ['缓存目录', `<span class="mono">${esc(t.dir||'--')}</span>`],
+    ]);
+    $('tileTbl').innerHTML = zs.length
+      ? zs.map(z=>`<tr><td>z${z}</td><td>${lv[z].count}</td><td>${fmtBytes(lv[z].bytes)}</td></tr>`).join('')
+      : '<tr><td colspan="3" class="muted">还没有缓存瓦片</td></tr>';
+  }
 
   // 地图
   layerMi.clearLayers(); layerMq.clearLayers(); layerRaw.clearLayers(); lineMiMq.clearLayers(); layerHist.clearLayers();

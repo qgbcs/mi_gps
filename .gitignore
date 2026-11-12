@@ -7,3 +7,6 @@ browser_profile/
 
 # 账号凭据（含明文密码与 serviceToken，不入库）
 credentials.json
+
+# 地图瓦片磁盘缓存（可重新下载，体积大）
+tiles/
