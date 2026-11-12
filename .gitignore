@@ -1,0 +1,9 @@
+# 运行期产物
+__pycache__/
+*.pyc
+
+# 浏览器登录态（Playwright 持久化 profile，体积大且含账号 Cookie）
+browser_profile/
+
+# 账号凭据（含明文密码与 serviceToken，不入库）
+credentials.json

@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>小米云 GPS × MQTT GPS 对照</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root{
+    --bg:#0f1419; --panel:#151b22; --panel2:#1b232c; --line:#263241;
+    --txt:#e6edf3; --dim:#8b9bb0; --red:#ff5c5c; --blue:#3d9bff; --green:#38d39f;
+    --amber:#f0b429; --gray:#8b9bb0;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{background:var(--bg);color:var(--txt);font:14px/1.5 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+  .sp{flex:1}
+  .side-head{padding:10px 12px 10px 22px;background:var(--panel);border-bottom:1px solid var(--line)}
+  .side-head h1{font-size:15px;margin:0 0 8px;font-weight:600}
+  .head-row{display:flex;align-items:center;gap:10px;margin-top:6px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--gray);display:inline-block;margin-right:6px}
+  .dot.ok{background:var(--green);box-shadow:0 0 8px var(--green)}
+  .dot.err{background:var(--red)}
+  .muted{color:var(--dim)}
+  button{background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:6px 12px;cursor:pointer}
+  button:hover{border-color:#3a4b5f}
+  label.chk{display:flex;align-items:center;gap:6px;color:var(--dim);cursor:pointer;user-select:none}
+  main{position:relative;display:grid;grid-template-columns:1fr 380px;height:100%;
+    transition:grid-template-columns .18s ease}
+  aside{position:relative;display:flex;flex-direction:column;overflow:hidden;border-left:1px solid var(--line);background:var(--bg)}
+  /* 面板左内侧的收缩/展开把手（贴在面板边缘，允许少量遮挡） */
+  #fold{position:absolute;left:0;top:50%;transform:translateY(-50%);z-index:600;
+    width:14px;height:56px;padding:0;border:0;border-right:1px solid var(--line);
+    border-radius:0 6px 6px 0;background:var(--panel2);color:var(--dim);
+    font:13px/1 sans-serif;cursor:pointer;transition:color .15s}
+  #fold:hover{color:var(--txt);background:#2a3a4b}
+  body.folded main{grid-template-columns:1fr 14px}
+  body.folded .side-head,body.folded .cards{display:none}
+  .cards{flex:1;overflow:auto;padding:8px}
+  .card{margin:0 0 8px;padding:10px;background:var(--panel);border:1px solid var(--line);border-radius:10px}
+  .card h2{font-size:13px;margin:0 0 8px;color:var(--dim);font-weight:600;letter-spacing:.5px;display:flex;align-items:center}
+  .badge{font-size:11px;padding:1px 6px;border-radius:10px;margin-left:8px;background:#22303f;color:var(--dim)}
+  .badge.on{background:rgba(56,211,159,.15);color:var(--green)}
+  .badge.off{background:rgba(255,92,92,.15);color:var(--red)}
+  .kv{display:grid;grid-template-columns:78px 1fr;gap:2px 8px;font-size:13px}
+  .kv dt{color:var(--dim)}
+  .kv dd{margin:0;word-break:break-all;font-variant-numeric:tabular-nums}
+  .mono{font-family:ui-monospace,Consolas,monospace}
+  .num{font-variant-numeric:tabular-nums}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{text-align:left;padding:5px 6px;border-bottom:1px solid var(--line)}
+  th{color:var(--dim);font-weight:500}
+  .big{font-size:22px;font-weight:700}
+  .good{color:var(--green)} .warn{color:var(--amber)} .bad{color:var(--red)}
+  #map{height:100%;width:100%;background:#0b1015}
+  .err{color:var(--red);font-size:12px}
+  .note{color:var(--dim);font-size:12px;line-height:1.65}
+  .note b{color:var(--txt);font-weight:600}
+  .arrow{color:var(--dim);margin:0 4px}
+  @media (max-width:820px){ main{grid-template-columns:1fr;grid-template-rows:60vh auto;height:auto} aside{border-left:0;border-top:1px solid var(--line)} .cards{overflow:visible} #fold{display:none} }
+  /* gps.txt 历史点的时间标签：默认透明背景，红字 + 1px 硬描边（无模糊） */
+  .hist-lbl{background:var(--lbl-bg,transparent);border:var(--lbl-border,0);
+    border-radius:4px;box-shadow:none;padding:0 3px;color:var(--lbl-color,#d40000);
+    font:700 var(--lbl-size,11px)/1.25 ui-monospace,Consolas,monospace;
+    text-shadow:var(--lbl-shadow,1px 1px 0 #fff,-1px -1px 0 #fff,1px -1px 0 #fff,-1px 1px 0 #fff);
+    white-space:nowrap}
+  .hist-lbl::before{display:none}
+  .raw{display:inline-block;margin-top:4px;max-width:260px;color:#8b9bb0;
+    font:11px/1.35 ui-monospace,Consolas,monospace;word-break:break-all}
+  .lbl-cfg{flex-wrap:nowrap;gap:5px;font-size:12px;white-space:nowrap}
+  .lbl-cfg input[type=range]{width:56px;flex:0 0 auto;accent-color:#3d9bff}
+  .lbl-cfg input[type=color]{width:22px;height:18px;padding:0;border:1px solid var(--line);
+    border-radius:4px;background:none;cursor:pointer}
+</style>
+</head>
+<body>
+<main>
+  <div id="map"></div>
+  <aside>
+    <button id="fold" title="收起信息栏">&#8250;</button>
+    <div class="side-head">
+      <h1>小米云 GPS × 手机 MQTT GPS 对照</h1>
+      <div class="head-row">
+        <span class="muted" id="conn"><span class="dot"></span>加载中</span>
+        <span class="sp"></span>
+        <span class="muted mono" id="clock">--:--:--</span>
+      </div>
+      <div class="head-row">
+        <label class="chk"><input type="checkbox" id="showHist" checked> 显示 gps.txt 历史轨迹</label>
+        <span class="sp"></span>
+        <button id="btn">立即刷新</button>
+      </div>
+      <div class="head-row">
+        <label class="chk"><input type="checkbox" id="showRaw"> 显示未校正点(原始WGS84)</label>
+      </div>
+      <div class="head-row lbl-cfg">
+        <span class="muted">时间标签</span>
+        <input type="range" id="lblSize" min="8" max="20" step="1">
+        <span class="muted mono" id="lblSizeVal"></span>
+        <label class="chk" title="文字颜色">字<input type="color" id="lblColor"></label>
+        <label class="chk" title="背景颜色">底<input type="color" id="lblBg"></label>
+        <label class="chk" title="显示背景"><input type="checkbox" id="lblBgOn">背景</label>
+      </div>
+    </div>
+    <div class="cards">
+    <div class="card">
+      <h2>小米云 · 查找设备 <span class="badge" id="miState">--</span></h2>
+      <dl class="kv" id="miKv"></dl>
+    </div>
+    <div class="card">
+      <h2>手机 MQTT · 实时定位 <span class="badge" id="mqState">--</span></h2>
+      <dl class="kv" id="mqKv"></dl>
+    </div>
+    <div class="card">
+      <h2>偏差分析</h2>
+      <div><span class="big" id="dRaw">--</span> <span class="muted">原始偏差</span>
+        <span class="arrow">→</span>
+        <span class="big good" id="dFix">--</span> <span class="muted">坐标系校正后</span></div>
+      <dl class="kv" style="margin-top:10px" id="dKv"></dl>
+      <div class="note" id="dNote" style="margin-top:8px"></div>
+    </div>
+    <div class="card">
+      <h2>坐标对照</h2>
+      <table>
+        <thead><tr><th>来源</th><th>纬度</th><th>经度</th></tr></thead>
+        <tbody id="tbl"><tr><td colspan="3" class="muted">--</td></tr></tbody>
+      </table>
+    </div>
+    <div class="card">
+      <h2>为什么会有偏差</h2>
+      <div class="note">
+        <p><b>1. 坐标系不同（约 500 m）</b>　手机 gps.txt 是 <b>WGS-84</b>；i.mi.com 网页用百度地图，展示 <b>BD-09</b>，接口 "autonavi" 字段是 <b>GCJ-02</b>。国内地图必须做 WGS→GCJ→BD 偏移。</p>
+        <p><b>2. gps.txt 是历史轨迹，不是实时位置</b>　手机端只在离开上一条记录约 500 m 时才追加一行，静止时最后一条会滞后很久。它现在只用于画绿色历史轨迹（可在右侧顶部开关关闭），实时位置改为 MQTT 直接向 Android <b>LocationManager</b> 取 last known location。</p>
+        <p><b>3. 手机时钟正常</b>　实测设备时间与服务器同为 +0800、误差 &lt; 1 s，不存在时间不同步；小米云 clientUpdateTime 持续刷新，是实时值。</p>
+        <p><b>结论（以小米云为准）</b>　小米 <span class="mono">/find/v3/device/status</span> 就是网页 /0/detail 用的同一个接口，坐标即网页显示值；手机实时点做 WGS→GCJ 转换后与它同量级（几十米内，取决于 GPS 精度）。</p>
+      </div>
+    </div>
+    </div>
+  </aside>
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+let map, layerMi, layerMq, layerRaw, layerHist, lineMiMq, circleMi, circleMq;
+let fitted = false;   // 只在首屏自动定位一次，之后用户拖动/缩放后不再自动移动
+
+function initMap(){
+  map = L.map('map', {zoomControl:true, attributionControl:true}).setView([28.26,112.95], 14);
+  L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+    {subdomains:'1234', maxZoom:18, attribution:'底图 © 高德地图 (GCJ-02)'}).addTo(map);
+  layerMi = L.layerGroup().addTo(map);
+  layerMq = L.layerGroup().addTo(map);
+  layerRaw = L.layerGroup();
+  layerHist = L.layerGroup();
+  lineMiMq = L.layerGroup().addTo(map);
+}
+
+function icon(color, label){
+  return L.divIcon({className:'', iconSize:[22,22],
+    html:`<div style="width:16px;height:16px;border-radius:50%;background:${color};border:3px solid #fff;box-shadow:0 0 6px rgba(0,0,0,.6)"></div>`});
+}
+
+// 指北为 0° 的方位角（顺时针），用于给历史轨迹加方向箭头
+function bearing(a, b){
+  const f1 = a[0]*Math.PI/180, f2 = b[0]*Math.PI/180, dl = (b[1]-a[1])*Math.PI/180;
+  const y = Math.sin(dl)*Math.cos(f2);
+  const x = Math.cos(f1)*Math.sin(f2) - Math.sin(f1)*Math.cos(f2)*Math.cos(dl);
+  return (Math.atan2(y, x)*180/Math.PI + 360) % 360;
+}
+
+function arrowIcon(deg){
+  return L.divIcon({className:'', iconSize:[14,14], iconAnchor:[7,7],
+    html:`<div style="transform:rotate(${deg}deg)"><svg width="14" height="14" viewBox="0 0 14 14">` +
+         `<path d="M7 1 L12 12 L7 9.4 L2 12 Z" fill="#38d39f" stroke="#0f1419" stroke-width=".8"/></svg></div>`});
+}
+
+function fmt(v, n=6){ return (v==null||isNaN(v)) ? '--' : Number(v).toFixed(n); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function kv(el, rows){ el.innerHTML = rows.map(([k,v])=>`<dt>${k}</dt><dd>${v}</dd>`).join(''); }
+
+function render(d){
+  const mi = d.mi||{}, mq = d.mqtt||{}, dl = d.delta||{};
+  $('conn').innerHTML = `<span class="dot ${(mi.ok||mq.ok)?'ok':'err'}"></span>更新于 ${esc(d.server_time)}`;
+
+  const ms = $('miState');
+  ms.textContent = mi.disabled ? '未加载' : (mi.ok ? (mi.online?'在线':'离线') : '失败');
+  ms.className = 'badge ' + (mi.disabled ? '' : (mi.ok ? (mi.online?'on':'off') : 'off'));
+  if (mi.ok){
+    kv($('miKv'), [
+      ['设备', esc(mi.name)],
+      ['电量', (mi.battery==null?'--':mi.battery+'%')],
+      ['位置', esc(mi.address||'--')],
+      ['更新时间', esc(mi.updated||'--')],
+      ['定位精度', mi.accuracy?`±${Math.round(mi.accuracy)} m`:'--'],
+      ['GCJ-02', `<span class="mono">${fmt(mi.gcj&&mi.gcj.lat)}, ${fmt(mi.gcj&&mi.gcj.lng)}</span>`],
+      ['BD-09', `<span class="mono">${fmt(mi.bd&&mi.bd.lat)}, ${fmt(mi.bd&&mi.bd.lng)}</span>`],
+    ]);
+  } else if (mi.disabled){
+    kv($('miKv'), [
+      ['状态', '启动时未加载小米云位置'],
+      ['开启方式', '<span class="mono">gps_map.py --mi</span>'],
+    ]);
+  } else {
+    kv($('miKv'), [['错误', `<span class="err">${esc(mi.error||'未知')}</span>`]]);
+  }
+
+  const qs = $('mqState');
+  const isLive = mq.source === 'live';
+  const stale = !!mq.stale;
+  const ageMin = mq.age_sec == null ? null : Math.round(mq.age_sec / 60);
+  qs.textContent = mq.ok ? (isLive ? '实时' : (stale ? `滞后 ${ageMin} 分钟` : '日志')) : '失败';
+  qs.className = 'badge ' + (mq.ok ? ((isLive || !stale) ? 'on' : 'off') : 'off');
+  if (mq.ok){
+    kv($('mqKv'), [
+      ['topic', esc(d.topic)],
+      ['来源', isLive ? `LocationManager · ${esc(mq.provider||'--')}` : 'gps.txt 历史日志'],
+      ['定位时间', `${esc(mq.log_time||'--')}${ageMin==null?'':` <span class="${stale?'warn':'muted'}">(${ageMin} 分钟前)</span>`}`],
+      ['事件', esc(mq.event||'--')],
+      ['精度', mq.acc==null?'--':`±${Math.round(mq.acc)} m`],
+      ['速度', mq.speed==null?'--':`${mq.speed} m/s`],
+      ['WGS-84', `<span class="mono">${fmt(mq.lat)}, ${fmt(mq.lng)}</span>`],
+      ['→ GCJ-02', `<span class="mono">${fmt(mq.gcj&&mq.gcj.lat)}, ${fmt(mq.gcj&&mq.gcj.lng)}</span>`],
+      ['历史点', `${((d.history&&d.history.points)||[]).length} 条${d.history&&d.history.error?'（读取失败）':''}`],
+    ]);
+  } else {
+    kv($('mqKv'), [['错误', `<span class="err">${esc(mq.error||'未知')}</span>`]]);
+  }
+
+  if (dl.raw_m != null){
+    $('dRaw').textContent = dl.raw_m + ' m';
+    $('dFix').textContent = dl.gcj_m + ' m';
+    $('dFix').className = 'big ' + (dl.gcj_m < 60 ? 'good' : (dl.gcj_m < 300 ? 'warn' : 'bad'));
+    kv($('dKv'), [
+      ['校正消除', `${dl.fixed_m} m`],
+      ['方向', `${dl.bearing}°`],
+      ['残差纬度', `${dl.res_dlat>0?'+':''}${dl.res_dlat} (${dl.res_lat_m} m)`],
+      ['残差经度', `${dl.res_dlng>0?'+':''}${dl.res_dlng} (${dl.res_lng_m} m)`],
+    ]);
+    const note = [`WGS84→GCJ02 消除了 ${dl.fixed_m} m 的坐标系偏差。`];
+    if (stale) note.push(`gps.txt 是历史日志（每约 500 m 才追加一条），最后一条已是 ${ageMin} 分钟前，剩余 ${dl.gcj_m} m 属于这期间手机移动，不是坐标系或时钟问题。`);
+    else if (isLive && dl.gcj_m > 60) note.push(`两端都是实时取点，剩余 ${dl.gcj_m} m 属于定位精度与 GPS 漂移（小米云实测精度约 ±${Math.round(mi.accuracy||0)} m）。`);
+    else if (dl.res_lat_m > Math.max(40, dl.res_lng_m * 3)) note.push('残差集中在南北向，来源是两端取点时间差/GPS 漂移，不是坐标系问题。');
+    else if (dl.res_lng_m > Math.max(40, dl.res_lat_m * 3)) note.push('残差集中在东西向，来源是两端取点时间差/GPS 漂移，不是坐标系问题。');
+    else if (dl.gcj_m > 60) note.push('残差为两点位置本身不同（取点时间差、GPS 精度）。');
+    else note.push('两点已基本重合。');
+    $('dNote').textContent = note.join('');
+  } else {
+    $('dRaw').textContent = '--'; $('dFix').textContent = '--';
+    $('dNote').textContent = mi.disabled
+      ? '小米云位置未加载（启动加 --mi 即可对比），当前只显示手机实时定位与 gps.txt 历史轨迹。'
+      : '';
+    kv($('dKv'), [['说明', mi.disabled ? '未加载小米云，无偏差可算' : '两路数据未同时可用']]);
+  }
+
+  const rows = [];
+  if (mi.ok && mi.gcj) rows.push(['小米 autonavi (GCJ-02)', mi.gcj.lat, mi.gcj.lng]);
+  if (mi.ok && mi.bd) rows.push(['小米 baidu (BD-09)', mi.bd.lat, mi.bd.lng]);
+  if (mq.ok) {
+    rows.push(['手机 gps.txt (WGS-84)', mq.lat, mq.lng]);
+    rows.push(['手机 → GCJ-02', mq.gcj.lat, mq.gcj.lng]);
+    rows.push(['手机 → BD-09', mq.bd.lat, mq.bd.lng]);
+  }
+  $('tbl').innerHTML = rows.length ? rows.map(r=>`<tr><td>${r[0]}</td><td class="mono">${fmt(r[1])}</td><td class="mono">${fmt(r[2])}</td></tr>`).join('')
+                                  : '<tr><td colspan="3" class="muted">--</td></tr>';
+
+  // 地图
+  layerMi.clearLayers(); layerMq.clearLayers(); layerRaw.clearLayers(); lineMiMq.clearLayers(); layerHist.clearLayers();
+  const pts = [];
+  if (mi.ok && mi.gcj){
+    const p = [mi.gcj.lat, mi.gcj.lng];
+    pts.push(p);
+    L.marker(p, {icon:icon('#ff5c5c')}).bindTooltip('小米云 · 当前实际位置 (GCJ-02)').addTo(layerMi);
+    if (mi.accuracy) circleMi = L.circle(p, {radius:mi.accuracy, color:'#ff5c5c', weight:1, fillOpacity:.06}).addTo(layerMi);
+  }
+  if (mq.ok && mq.gcj){
+    const p = [mq.gcj.lat, mq.gcj.lng];
+    pts.push(p);
+    L.marker(p, {icon:icon(stale ? '#8b9bb0' : '#3d9bff')})
+      .bindTooltip(stale ? `gps.txt 最后记录（${ageMin} 分钟前）` : 'MQTT (WGS→GCJ)').addTo(layerMq);
+    if (mq.acc) circleMq = L.circle(p, {radius:mq.acc, color:'#3d9bff', weight:1, fillOpacity:.06}).addTo(layerMq);
+    if (mi.ok && mi.gcj){
+      L.polyline([[mi.gcj.lat,mi.gcj.lng], p], {color:'#f0b429', weight:2, dashArray:'6 6'}).addTo(lineMiMq);
+    }
+  }
+  if (mq.ok){
+    const raw = [mq.lat, mq.lng];
+    L.marker(raw, {icon:icon('#8b9bb0')}).bindTooltip('原始 WGS-84（未校正）').addTo(layerRaw);
+    if ($('showRaw').checked){ layerRaw.addTo(map); pts.push(raw); } else { map.removeLayer(layerRaw); }
+  }
+
+  // gps.txt 历史轨迹（独立开关，只做历史回溯，不参与实时定位）
+  const hp = ((d.history && d.history.points) || []).filter(p => p && p.gcj);
+  if (hp.length){
+    const path = hp.map(p => [p.gcj.lat, p.gcj.lng]);
+    if (path.length > 1){
+      L.polyline(path, {color:'#38d39f', weight:2, opacity:.5, dashArray:'4 4'}).addTo(layerHist);
+      // 每段中点放一个箭头，指明日志的时间先后顺序
+      for (let i = 1; i < path.length; i++){
+        const a = path[i-1], b = path[i];
+        if (Math.abs(a[0]-b[0]) < 1e-9 && Math.abs(a[1]-b[1]) < 1e-9) continue;
+        L.marker([(a[0]+b[0])/2, (a[1]+b[1])/2],
+          {icon:arrowIcon(bearing(a, b)), interactive:false}).addTo(layerHist);
+      }
+    }
+    hp.forEach((p, i) => {
+      const last = i === hp.length - 1;
+      const ll = [p.gcj.lat, p.gcj.lng];
+      const html =
+        `<b>${esc(p.time || '--')}</b><br>${esc(p.event || '')}<br>` +
+        `WGS-84：${fmt(p.lat)}, ${fmt(p.lng)}` +
+        (p.acc == null ? '' : `<br>精度：±${Math.round(p.acc)} m`) +
+        (p.speed == null ? '' : `<br>速度：${p.speed} m/s`) +
+        (p.dist == null ? '' : `<br>本次移动：${Math.round(p.dist)} m`) +
+        (p.total == null ? '' : `<br>累计移动：${Math.round(p.total)} m`) +
+        (p.raw ? `<br><span class="raw">${esc(p.raw)}</span>` : '');
+      L.circleMarker(ll, {
+        radius: last ? 6 : 4, color:'#0f1419', weight:1,
+        fillColor: last ? '#3d9bff' : '#38d39f', fillOpacity:.95
+      }).bindPopup(html)
+       .bindTooltip(esc((p.time || '').slice(5, 16)), {permanent:true, direction:'top', offset:[0,-6], className:'hist-lbl'})
+       .addTo(layerHist);
+      // 透明命中圈：圆点视觉尺寸不变，点击范围放大到 12px 半径
+      L.circleMarker(ll, {radius:12, stroke:false, fill:true, fillColor:'#000', fillOpacity:0})
+        .bindPopup(html).addTo(layerHist);
+    });
+  }
+  if ($('showHist').checked) layerHist.addTo(map); else map.removeLayer(layerHist);
+
+  // 只首屏定位一次；之后刷新只更新图层，绝不移动用户当前视野
+  if (!fitted && pts.length){
+    if (pts.length === 1) map.setView(pts[0], 16);
+    else map.fitBounds(L.latLngBounds(pts).pad(0.35));
+    fitted = true;
+  }
+}
+
+async function refresh(){
+  try{
+    const r = await fetch('/data_json(p)?t=' + Date.now(), {cache:'no-store'});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    render(d);
+  }catch(e){
+    $('conn').innerHTML = `<span class="dot err"></span>连接失败：${esc(e.message)}`;
+  }
+  $('clock').textContent = new Date().toLocaleTimeString('zh-CN', {hour12:false});
+}
+
+// ---- 时间标签样式设置：字号 / 文字色 / 背景色，存 localStorage ----
+const LBL_CFG = {size: 11, color: '#d40000', bg: '#ffffff', bgOn: false};
+const OUTLINE = '1px 1px 0 #fff,-1px -1px 0 #fff,1px -1px 0 #fff,-1px 1px 0 #fff';
+
+function applyLbl(cfg){
+  const s = document.documentElement.style;
+  s.setProperty('--lbl-size', cfg.size + 'px');
+  s.setProperty('--lbl-color', cfg.color);
+  if (cfg.bgOn){
+    s.setProperty('--lbl-bg', cfg.bg + 'e6');
+    s.setProperty('--lbl-border', '1px solid rgba(0,0,0,.18)');
+    s.setProperty('--lbl-shadow', 'none');
+  } else {
+    s.setProperty('--lbl-bg', 'transparent');
+    s.setProperty('--lbl-border', '0');
+    s.setProperty('--lbl-shadow', OUTLINE);
+  }
+  $('lblSize').value = cfg.size;
+  $('lblSizeVal').textContent = cfg.size;
+  $('lblColor').value = cfg.color;
+  $('lblBg').value = cfg.bg;
+  $('lblBgOn').checked = cfg.bgOn;
+  localStorage.setItem('mi_gps_lbl', JSON.stringify(cfg));
+}
+
+(function initLbl(){
+  try { Object.assign(LBL_CFG, JSON.parse(localStorage.getItem('mi_gps_lbl') || '{}')); } catch(e){}
+  applyLbl(LBL_CFG);
+  $('lblSize').oninput = e => { LBL_CFG.size = +e.target.value; applyLbl(LBL_CFG); };
+  $('lblColor').oninput = e => { LBL_CFG.color = e.target.value; applyLbl(LBL_CFG); };
+  $('lblBg').oninput = e => { LBL_CFG.bg = e.target.value; applyLbl(LBL_CFG); };
+  $('lblBgOn').onchange = e => { LBL_CFG.bgOn = e.target.checked; applyLbl(LBL_CFG); };
+})();
+
+initMap();
+$('btn').onclick = refresh;
+$('showRaw').onchange = refresh;
+$('showHist').onchange = refresh;
+$('fold').onclick = () => {
+  const folded = document.body.classList.toggle('folded');
+  const btn = $('fold');
+  btn.textContent = folded ? '\u2039' : '\u203A';
+  btn.title = folded ? '展开信息栏' : '收起信息栏';
+  setTimeout(() => map.invalidateSize(), 200);
+};
+refresh();
+setInterval(refresh, 10000);
+</script>
+</body>
+</html>
