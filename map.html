@@ -28,7 +28,7 @@
   main{position:relative;display:grid;grid-template-columns:1fr 380px;height:100%;
     transition:grid-template-columns .18s ease}
   aside{position:relative;display:flex;flex-direction:column;overflow:hidden;border-left:1px solid var(--line);background:var(--bg)}
-  /* 面板左内侧的收缩/展开把手（贴在面板边缘，允许少量遮挡） */
+  /* 把手贴在面板左内边缘：与面板平齐，不突出、不改内部留白，允许轻微遮挡文字 */
   #fold{position:absolute;left:0;top:50%;transform:translateY(-50%);z-index:600;
     width:14px;height:56px;padding:0;border:0;border-right:1px solid var(--line);
     border-radius:0 6px 6px 0;background:var(--panel2);color:var(--dim);
@@ -37,8 +37,17 @@
   body.folded main{grid-template-columns:1fr 14px}
   body.folded .side-head,body.folded .cards{display:none}
   .cards{flex:1;overflow:auto;padding:8px}
-  .card{margin:0 0 8px;padding:10px;background:var(--panel);border:1px solid var(--line);border-radius:10px}
-  .card h2{font-size:13px;margin:0 0 8px;color:var(--dim);font-weight:600;letter-spacing:.5px;display:flex;align-items:center}
+  .card{margin:0 0 8px;padding:8px 10px;background:var(--panel);border:1px solid var(--line);border-radius:10px}
+  .card h2{font-size:12px;margin:0 0 6px;color:var(--dim);font-weight:600;letter-spacing:.5px;display:flex;align-items:center;gap:6px}
+  .row{display:flex;align-items:center;gap:6px;font-size:12px;margin-top:6px;flex-wrap:wrap}
+  .row .sp{flex:1}
+  .row input[type=number]{width:56px;background:var(--panel2);border:1px solid var(--line);
+    color:var(--txt);border-radius:5px;padding:2px 4px;font:12px ui-monospace,Consolas,monospace}
+  .seg{display:flex;align-items:center;gap:6px;font-size:12px;padding:3px 0;border-bottom:1px dashed var(--line)}
+  .seg:last-child{border-bottom:0}
+  .seg .sw{width:10px;height:10px;border-radius:2px;flex:0 0 auto}
+  .seg .t{flex:1;color:var(--txt);font-variant-numeric:tabular-nums}
+  .seg .m{color:var(--dim)}
   .badge{font-size:11px;padding:1px 6px;border-radius:10px;margin-left:8px;background:#22303f;color:var(--dim)}
   .badge.on{background:rgba(56,211,159,.15);color:var(--green)}
   .badge.off{background:rgba(255,92,92,.15);color:var(--red)}
@@ -79,21 +88,44 @@
   <aside>
     <button id="fold" title="收起信息栏">&#8250;</button>
     <div class="side-head">
-      <h1>小米云 GPS × 手机 MQTT GPS 对照</h1>
       <div class="head-row">
-        <span class="muted" id="conn"><span class="dot"></span>加载中</span>
+        <h1 style="margin:0;font-size:13px">手机 GPS 轨迹</h1>
         <span class="sp"></span>
+        <span class="muted" id="conn"><span class="dot"></span>加载中</span>
         <span class="muted mono" id="clock">--:--:--</span>
       </div>
-      <div class="head-row">
-        <label class="chk"><input type="checkbox" id="showHist" checked> 显示 gps.txt 历史轨迹</label>
+    </div>
+    <div class="cards">
+    <div class="card">
+      <h2>设置</h2>
+      <div class="row">
+        <span class="muted">刷新</span>
+        <input type="number" id="refreshSec" min="3" max="600" step="1">
+        <span class="muted">秒</span>
         <span class="sp"></span>
         <button id="btn">立即刷新</button>
       </div>
-      <div class="head-row">
-        <label class="chk"><input type="checkbox" id="showRaw"> 显示未校正点(原始WGS84)</label>
+      <div class="row">
+        <span class="muted">分段间隔 ≥</span>
+        <input type="number" id="gapMin" min="1" max="1440" step="1">
+        <span class="muted">分钟</span>
+        <span class="sp"></span>
+        <span class="muted mono" id="histState">--</span>
       </div>
-      <div class="head-row lbl-cfg">
+      <div class="row">
+        <span class="muted">gps.txt 末尾</span>
+        <input type="number" id="lines" min="1" max="5000" step="10">
+        <span class="muted">行</span>
+        <span class="sp"></span>
+        <button id="btnHist">刷新 gps.txt</button>
+      </div>
+      <div class="row">
+        <label class="chk"><input type="checkbox" id="showHist" checked> 显示历史轨迹</label>
+        <label class="chk"><input type="checkbox" id="showRaw"> 未校正点</label>
+        <span class="sp"></span>
+        <button id="segAll" style="padding:2px 8px;font-size:11px">全选</button>
+      </div>
+      <div class="row lbl-cfg">
         <span class="muted">时间标签</span>
         <input type="range" id="lblSize" min="8" max="20" step="1">
         <span class="muted mono" id="lblSizeVal"></span>
@@ -102,7 +134,11 @@
         <label class="chk" title="显示背景"><input type="checkbox" id="lblBgOn">背景</label>
       </div>
     </div>
-    <div class="cards">
+    <div class="card">
+      <h2>路线段 <span class="badge" id="segState">--</span>
+        <span class="sp"></span><span class="muted" style="font-weight:400">按颜色区分</span></h2>
+      <div id="segList"><div class="muted" style="font-size:12px">--</div></div>
+    </div>
     <div class="card">
       <h2>小米云 · 查找设备 <span class="badge" id="miState">--</span></h2>
       <dl class="kv" id="miKv"></dl>
@@ -178,10 +214,10 @@ function bearing(a, b){
   return (Math.atan2(y, x)*180/Math.PI + 360) % 360;
 }
 
-function arrowIcon(deg){
+function arrowIcon(deg, color){
   return L.divIcon({className:'', iconSize:[14,14], iconAnchor:[7,7],
     html:`<div style="transform:rotate(${deg}deg)"><svg width="14" height="14" viewBox="0 0 14 14">` +
-         `<path d="M7 1 L12 12 L7 9.4 L2 12 Z" fill="#38d39f" stroke="#0f1419" stroke-width=".8"/></svg></div>`});
+         `<path d="M7 1 L12 12 L7 9.4 L2 12 Z" fill="${color}" stroke="#0f1419" stroke-width=".8"/></svg></div>`});
 }
 
 function fmt(v, n=6){ return (v==null||isNaN(v)) ? '--' : Number(v).toFixed(n); }
@@ -192,6 +228,115 @@ function fmtBytes(n){
   return (i ? v.toFixed(1) : v) + ' ' + u[i];
 }
 function kv(el, rows){ el.innerHTML = rows.map(([k,v])=>`<dt>${k}</dt><dd>${v}</dd>`).join(''); }
+
+// ---- 历史轨迹：只按时间间隔切分路线段，每段一种颜色 ----
+const PAL = ['#38d39f','#3d9bff','#f0b429','#ff6b6b','#b06cff','#00c2c7','#ff8a3d','#8fbf3f'];
+let LAST = null;
+// 设置：设备位置刷新间隔 / 分段间隔 / gps.txt 末尾行数
+const S = {refreshSec: 10, gapMin: 60, lines: 100};
+
+function hiddenSet(){
+  try { return new Set(JSON.parse(localStorage.getItem('mi_gps_hidden') || '[]')); }
+  catch(e){ return new Set(); }
+}
+function saveHidden(set){ localStorage.setItem('mi_gps_hidden', JSON.stringify([...set])); }
+
+// 仅时间间隔：相邻两点间隔 ≥ gapSec 秒即断开
+function segmentsOf(points, gapSec){
+  const out = []; let cur = [];
+  points.forEach(p => {
+    const prev = cur[cur.length-1];
+    if (prev && prev.ts && p.ts && (p.ts - prev.ts) >= gapSec){ out.push(cur); cur = []; }
+    cur.push(p);
+  });
+  if (cur.length) out.push(cur);
+  return out;
+}
+function segKey(seg){ return String(seg[0].ts || seg[0].time || ''); }
+function shortTime(t){ return (t || '').slice(5, 16); }
+
+function buildSegList(segs, hidden, hist){
+  $('segState').textContent = segs.length ? segs.length + ' 段' : '0 段';
+  $('segAll').textContent = hidden.size ? '全选' : '全不选';
+  const st = $('histState');
+  if (hist.error){
+    st.innerHTML = `<span class="err">gps.txt 读取失败</span>`;
+  } else {
+    const n = (hist.points || []).length;
+    st.textContent = `${n} 点 · ${hist.lines || '--'} 行 · ${(hist.loaded_at || '--').slice(11) || '--'}`;
+  }
+  const el = $('segList');
+  if (!segs.length){
+    el.innerHTML = '<div class="muted" style="font-size:12px">没有历史点</div>';
+    return;
+  }
+  el.innerHTML = segs.map((seg, si) => {
+    const color = PAL[si % PAL.length];
+    const k = segKey(seg);
+    // 里程：dist 是相对上一点的位移，段内首点的那次位移跨越了分段间隔，不计入
+    const km = (seg.reduce((a, p, i) => a + (i ? (p.dist || 0) : 0), 0) / 1000).toFixed(1);
+    return `<label class="seg"><input type="checkbox" data-k="${esc(k)}"${hidden.has(k) ? '' : ' checked'}>` +
+      `<span class="sw" style="background:${color}"></span>` +
+      `<span class="t">${esc(shortTime(seg[0].time))} – ${esc(shortTime(seg[seg.length-1].time))}</span>` +
+      `<span class="m">${seg.length}点 · ${km}km</span></label>`;
+  }).join('');
+  el.querySelectorAll('input[data-k]').forEach(cb => {
+    cb.onchange = () => {
+      const set = hiddenSet();
+      if (cb.checked) set.delete(cb.dataset.k); else set.add(cb.dataset.k);
+      saveHidden(set);
+      if (LAST) drawHist(LAST);
+    };
+  });
+}
+
+function drawHist(d){
+  LAST = d;
+  layerHist.clearLayers();
+  const hist = d.history || {};
+  const hp = (hist.points || []).filter(p => p && p.gcj);
+  const segs = hp.length ? segmentsOf(hp, Math.max(1, S.gapMin) * 60) : [];
+  const hidden = hiddenSet();
+
+  segs.forEach((seg, si) => {
+    const color = PAL[si % PAL.length];
+    if (hidden.has(segKey(seg))) return;
+    const path = seg.map(p => [p.gcj.lat, p.gcj.lng]);
+    if (path.length > 1){
+      L.polyline(path, {color, weight:2, opacity:.75, dashArray:'4 4'}).addTo(layerHist);
+      for (let i = 1; i < path.length; i++){
+        const a = path[i-1], b = path[i];
+        if (Math.abs(a[0]-b[0]) < 1e-9 && Math.abs(a[1]-b[1]) < 1e-9) continue;
+        L.marker([(a[0]+b[0])/2, (a[1]+b[1])/2],
+          {icon:arrowIcon(bearing(a, b), color), interactive:false}).addTo(layerHist);
+      }
+    }
+    seg.forEach((p, i) => {
+      const last = i === seg.length - 1;
+      const ll = [p.gcj.lat, p.gcj.lng];
+      const html =
+        `<b>${esc(p.time || '--')}</b><br>${esc(p.event || '')}<br>` +
+        `路线段：第 ${si + 1} 段<br>` +
+        `WGS-84：${fmt(p.lat)}, ${fmt(p.lng)}` +
+        (p.acc == null ? '' : `<br>精度：±${Math.round(p.acc)} m`) +
+        (p.speed == null ? '' : `<br>速度：${p.speed} m/s`) +
+        (p.dist == null ? '' : `<br>本次移动：${Math.round(p.dist)} m`) +
+        (p.total == null ? '' : `<br>累计移动：${Math.round(p.total)} m`) +
+        (p.raw ? `<br><span class="raw">${esc(p.raw)}</span>` : '');
+      L.circleMarker(ll, {radius:last ? 6 : 4, color:'#0f1419', weight:1,
+        fillColor:color, fillOpacity:.95})
+        .bindPopup(html)
+        .bindTooltip(esc(shortTime(p.time)), {permanent:true, direction:'top', offset:[0,-6], className:'hist-lbl'})
+        .addTo(layerHist);
+      // 透明命中圈：圆点视觉尺寸不变，点击范围放大到 12px 半径
+      L.circleMarker(ll, {radius:12, stroke:false, fill:true, fillColor:'#000', fillOpacity:0})
+        .bindPopup(html).addTo(layerHist);
+    });
+  });
+
+  buildSegList(segs, hidden, hist);
+  if ($('showHist').checked) layerHist.addTo(map); else map.removeLayer(layerHist);
+}
 
 function render(d){
   const mi = d.mi||{}, mq = d.mqtt||{}, dl = d.delta||{};
@@ -325,42 +470,7 @@ function render(d){
   }
 
   // gps.txt 历史轨迹（独立开关，只做历史回溯，不参与实时定位）
-  const hp = ((d.history && d.history.points) || []).filter(p => p && p.gcj);
-  if (hp.length){
-    const path = hp.map(p => [p.gcj.lat, p.gcj.lng]);
-    if (path.length > 1){
-      L.polyline(path, {color:'#38d39f', weight:2, opacity:.5, dashArray:'4 4'}).addTo(layerHist);
-      // 每段中点放一个箭头，指明日志的时间先后顺序
-      for (let i = 1; i < path.length; i++){
-        const a = path[i-1], b = path[i];
-        if (Math.abs(a[0]-b[0]) < 1e-9 && Math.abs(a[1]-b[1]) < 1e-9) continue;
-        L.marker([(a[0]+b[0])/2, (a[1]+b[1])/2],
-          {icon:arrowIcon(bearing(a, b)), interactive:false}).addTo(layerHist);
-      }
-    }
-    hp.forEach((p, i) => {
-      const last = i === hp.length - 1;
-      const ll = [p.gcj.lat, p.gcj.lng];
-      const html =
-        `<b>${esc(p.time || '--')}</b><br>${esc(p.event || '')}<br>` +
-        `WGS-84：${fmt(p.lat)}, ${fmt(p.lng)}` +
-        (p.acc == null ? '' : `<br>精度：±${Math.round(p.acc)} m`) +
-        (p.speed == null ? '' : `<br>速度：${p.speed} m/s`) +
-        (p.dist == null ? '' : `<br>本次移动：${Math.round(p.dist)} m`) +
-        (p.total == null ? '' : `<br>累计移动：${Math.round(p.total)} m`) +
-        (p.raw ? `<br><span class="raw">${esc(p.raw)}</span>` : '');
-      L.circleMarker(ll, {
-        radius: last ? 6 : 4, color:'#0f1419', weight:1,
-        fillColor: last ? '#3d9bff' : '#38d39f', fillOpacity:.95
-      }).bindPopup(html)
-       .bindTooltip(esc((p.time || '').slice(5, 16)), {permanent:true, direction:'top', offset:[0,-6], className:'hist-lbl'})
-       .addTo(layerHist);
-      // 透明命中圈：圆点视觉尺寸不变，点击范围放大到 12px 半径
-      L.circleMarker(ll, {radius:12, stroke:false, fill:true, fillColor:'#000', fillOpacity:0})
-        .bindPopup(html).addTo(layerHist);
-    });
-  }
-  if ($('showHist').checked) layerHist.addTo(map); else map.removeLayer(layerHist);
+  drawHist(d);
 
   // 只首屏定位一次；之后刷新只更新图层，绝不移动用户当前视野
   if (!fitted && pts.length){
@@ -416,10 +526,74 @@ function applyLbl(cfg){
   $('lblBgOn').onchange = e => { LBL_CFG.bgOn = e.target.checked; applyLbl(LBL_CFG); };
 })();
 
+// ---- 设置读写（localStorage）----
+const S_KEY = 'mi_gps_cfg';
+function clampInt(v, lo, hi, dft){
+  v = parseInt(v, 10);
+  if (isNaN(v)) return dft;
+  return Math.min(hi, Math.max(lo, v));
+}
+function loadS(){
+  try { Object.assign(S, JSON.parse(localStorage.getItem(S_KEY) || '{}')); } catch(e){}
+  S.refreshSec = clampInt(S.refreshSec, 3, 600, 10);
+  S.gapMin = clampInt(S.gapMin, 1, 1440, 60);
+  S.lines = clampInt(S.lines, 1, 5000, 100);
+  $('refreshSec').value = S.refreshSec;
+  $('gapMin').value = S.gapMin;
+  $('lines').value = S.lines;
+}
+function saveS(){ localStorage.setItem(S_KEY, JSON.stringify(S)); }
+
+// gps.txt 不随自动刷新重读：只有启动和点「刷新 gps.txt」才回手机取
+async function reloadHist(){
+  const btn = $('btnHist');
+  const old = btn.textContent;
+  btn.disabled = true; btn.textContent = '加载中…';
+  try{
+    const r = await fetch('/reload_hist(p)?lines=' + S.lines, {cache:'no-store'});
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || '读取失败');
+    await refresh();
+  }catch(e){
+    $('histState').innerHTML = `<span class="err">${esc(e.message)}</span>`;
+  }finally{
+    btn.disabled = false; btn.textContent = old;
+  }
+}
+
+let timer = null;
+function schedule(){
+  clearTimeout(timer);
+  timer = setTimeout(async () => { await refresh(); schedule(); }, S.refreshSec * 1000);
+}
+
+loadS();
 initMap();
 $('btn').onclick = refresh;
+$('btnHist').onclick = reloadHist;
 $('showRaw').onchange = refresh;
 $('showHist').onchange = refresh;
+$('refreshSec').onchange = e => {
+  S.refreshSec = clampInt(e.target.value, 3, 600, 10);
+  e.target.value = S.refreshSec; saveS(); schedule();
+};
+$('gapMin').onchange = e => {
+  S.gapMin = clampInt(e.target.value, 1, 1440, 60);
+  e.target.value = S.gapMin; saveS();
+  if (LAST) drawHist(LAST);
+};
+$('lines').onchange = e => {
+  S.lines = clampInt(e.target.value, 1, 5000, 100);
+  e.target.value = S.lines; saveS();
+};
+$('segAll').onclick = () => {
+  if (!LAST) return;
+  const hp = ((LAST.history || {}).points || []).filter(p => p && p.gcj);
+  const segs = hp.length ? segmentsOf(hp, Math.max(1, S.gapMin) * 60) : [];
+  const hidden = hiddenSet();
+  saveHidden(hidden.size ? new Set() : new Set(segs.map(segKey)));
+  drawHist(LAST);
+};
 $('fold').onclick = () => {
   const folded = document.body.classList.toggle('folded');
   const btn = $('fold');
@@ -427,8 +601,7 @@ $('fold').onclick = () => {
   btn.title = folded ? '展开信息栏' : '收起信息栏';
   setTimeout(() => map.invalidateSize(), 200);
 };
-refresh();
-setInterval(refresh, 10000);
+refresh().then(schedule);
 </script>
 </body>
 </html>

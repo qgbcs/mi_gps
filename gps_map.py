@@ -31,7 +31,8 @@ import server_http  # noqa: E402  (复用 multi_mqtt 的 HTTP RPC 服务器)
 
 MAP_HTML = os.path.join(HERE, "map.html")
 STATE = {"device": None, "topic": None, "key": None, "timeout": 8.0, "use_mi": False,
-         "cache": None, "cache_ts": 0.0, "cache_sec": 5.0}
+         "cache": None, "cache_ts": 0.0, "cache_sec": 5.0,
+         "lines": 100, "hist": None, "hist_ts": 0.0, "hist_error": None}
 _lock = threading.Lock()
 
 # ---- 地图瓦片磁盘缓存 ----
@@ -71,7 +72,6 @@ def build_payload(force=False):
     else:
         dev, mi_err = None, None          # 默认不加载小米云，省掉登录与外部请求
     mq, mq_err = _safe(mqtt_gps.latest, STATE["topic"], STATE["key"], STATE["timeout"])
-    hist, hist_err = _safe(mqtt_gps.history, STATE["topic"], STATE["key"], STATE["timeout"])
     cred = mi_client.credentials_state()
 
     out = {
@@ -81,7 +81,9 @@ def build_payload(force=False):
         "mi": {"ok": dev is not None, "error": mi_err,
                "disabled": not STATE["use_mi"]},
         "mqtt": {"ok": mq is not None, "error": mq_err},
-        "history": {"ok": hist is not None, "error": hist_err, "points": []},
+        "history": {"ok": STATE["hist"] is not None, "error": STATE["hist_error"],
+                    "points": STATE["hist"] or [], "lines": STATE["lines"],
+                    "loaded_at": _fmt_ms(STATE["hist_ts"] * 1000) if STATE["hist_ts"] else None},
         "account": {"user_id": (mi_client.load_credentials() or {}).get("user_id"),
                     "has_token": cred.get("has_token"),
                     "expires_at": _fmt_ms((cred.get("expires_at") or 0) * 1000) if cred.get("expires_at") else None},
@@ -114,15 +116,6 @@ def build_payload(force=False):
             "gcj": {"lat": gcj[0], "lng": gcj[1]}, "bd": {"lat": bd[0], "lng": bd[1]},
             "gcj_offset": {"dlat": gcj[0] - mq["lat"], "dlng": gcj[1] - mq["lng"]},
         })
-
-    if hist:
-        out["history"]["points"] = [
-            {"time": p.get("time"), "ts": p.get("ts"), "event": p.get("event"),
-             "lat": p["lat"], "lng": p["lng"], "acc": p.get("acc"), "speed": p.get("speed"),
-             "dist": p.get("dist"), "total": p.get("total"), "raw": p.get("raw"),
-             "gcj": dict(zip(("lat", "lng"), coord.wgs84_to_gcj02(p["lat"], p["lng"])))}
-            for p in hist
-        ]
 
     mi_gcj = (out["mi"].get("gcj") or None)
     if mi_gcj and mq:
@@ -283,6 +276,49 @@ def map_html(p):
         p.set_data(fp.read())
 
 
+def load_history(lines=None):
+    """读 gps.txt 末尾 lines 行并缓存；只在启动与手动刷新时调用，不随页面刷新重读。"""
+    lines = max(1, min(int(lines or STATE["lines"]), 5000))
+    pts, err = _safe(mqtt_gps.history, STATE["topic"], STATE["key"],
+                     STATE["timeout"], lines, lines, False)
+    with _lock:
+        STATE["lines"] = lines
+        STATE["cache"] = None            # 历史变了，丢弃聚合缓存
+        if err is not None:
+            STATE["hist_error"] = err
+            return
+        out = []
+        for p in pts:
+            g = coord.wgs84_to_gcj02(p["lat"], p["lng"])
+            out.append({"time": p.get("time"), "ts": p.get("ts"), "event": p.get("event"),
+                        "lat": p["lat"], "lng": p["lng"], "acc": p.get("acc"),
+                        "speed": p.get("speed"), "dist": p.get("dist"),
+                        "total": p.get("total"), "raw": p.get("raw"),
+                        "gcj": {"lat": g[0], "lng": g[1]}})
+        STATE["hist"] = out
+        STATE["hist_ts"] = time.time()
+        STATE["hist_error"] = None
+
+
+def reload_hist(p):
+    """手动刷新 gps.txt：/reload_hist(p)?lines=100"""
+    query = urllib.parse.parse_qs(p.handler.path.partition("?")[2])
+    try:
+        lines = int(query.get("lines", [""])[0])
+    except (TypeError, ValueError):
+        lines = None
+    load_history(lines)
+    p.set_header("Content-Type", "application/json; charset=utf-8")
+    p.set_header("Cache-Control", "no-store")
+    p.set_data(json.dumps({
+        "ok": STATE["hist_error"] is None and STATE["hist"] is not None,
+        "lines": STATE["lines"],
+        "count": len(STATE["hist"] or []),
+        "error": STATE["hist_error"],
+        "loaded_at": _fmt_ms(STATE["hist_ts"] * 1000) if STATE["hist_ts"] else None,
+    }, ensure_ascii=False))
+
+
 def data_json(p):
     p.set_header("Content-Type", "application/json; charset=utf-8")
     p.set_header("Cache-Control", "no-store")
@@ -309,13 +345,19 @@ def main(argv=None):
     ap.add_argument("--mi", action="store_true",
                     help="同时加载小米云网页位置（默认不加载）")
     ap.add_argument("--cache", type=float, default=5.0, help="数据缓存秒数")
+    ap.add_argument("--lines", type=int, default=100,
+                    help="启动时加载 gps.txt 末尾多少行（默认 100）")
     args = ap.parse_args(argv)
     STATE.update(device=args.device, topic=args.topic, key=args.key,
                  timeout=args.timeout, use_mi=args.mi, cache_sec=args.cache)
+    load_history(args.lines)
 
     print("手机 GPS 页: http://127.0.0.1:%d/map_html(p)" % args.port)
     print("JSON: http://127.0.0.1:%d/data_json(p)  topic=%s  小米云=%s"
           % (args.port, args.topic, "加载" if args.mi else "不加载（--mi 可开启）"))
+    print("gps.txt: 末尾 %d 行 → %d 点%s"
+          % (STATE["lines"], len(STATE["hist"] or []),
+             "" if STATE["hist_error"] is None else "（读取失败：%s）" % STATE["hist_error"]))
     server_http.start_rpc_server(
         port=args.port, ip=args.host, globals=globals(),
         redirect_root="/map_html(p)", persist_aliases=False)
