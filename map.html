@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>小米云 GPS × MQTT GPS 对照</title>
+<title>GPS 小米云× MQTT对照</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
   :root{
@@ -23,6 +23,10 @@
   .dot.err{background:var(--red)}
   .muted{color:var(--dim)}
   button{background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:6px 12px;cursor:pointer}
+  /* 按钮上的快捷键角标 */
+  .kbd{display:inline-block;margin-left:5px;padding:0 4px;border:1px solid var(--line);
+    border-radius:3px;background:var(--bg);color:var(--dim);
+    font:10px/14px ui-monospace,Consolas,monospace;vertical-align:1px}
   button:hover{border-color:#3a4b5f}
   label.chk{display:flex;align-items:center;gap:6px;color:var(--dim);cursor:pointer;user-select:none}
   main{position:relative;display:grid;grid-template-columns:1fr 380px;height:100%;
@@ -86,10 +90,10 @@
 <main>
   <div id="map"></div>
   <aside>
-    <button id="fold" title="收起信息栏">&#8250;</button>
+    <button id="fold" title="收起信息栏 (\)">&#8250;</button>
     <div class="side-head">
       <div class="head-row">
-        <h1 style="margin:0;font-size:13px">手机 GPS 轨迹</h1>
+        <h1 style="margin:0;font-size:13px">GPS轨迹</h1>
         <span class="sp"></span>
         <span class="muted" id="conn"><span class="dot"></span>加载中</span>
         <span class="muted mono" id="clock">--:--:--</span>
@@ -99,39 +103,42 @@
     <div class="card">
       <h2>设置</h2>
       <div class="row">
-        <span class="muted">刷新</span>
-        <input type="number" id="refreshSec" min="3" max="600" step="1">
+        <span class="muted" title="设备当前位置的自动刷新间隔">刷新</span>
+        <input type="number" id="refreshSec" min="3" max="600" step="1"
+               title="自动刷新间隔（秒），3–600；手动可随时按 R 立即刷新">
         <span class="muted">秒</span>
         <span class="sp"></span>
-        <button id="btn">立即刷新</button>
+        <button id="btn" title="重新读取设备当前位置（快捷键 R）">立即刷新<span class="kbd">R</span></button>
       </div>
       <div class="row">
-        <span class="muted">分段间隔 ≥</span>
-        <input type="number" id="gapMin" min="1" max="1440" step="1">
+        <span class="muted" title="相邻两点的 gps.txt 记录时间间隔 ≥ 该值就切成新的路线段">分段间隔 ≥</span>
+        <input type="number" id="gapMin" min="1" max="1440" step="1"
+               title="分段阈值（分钟）：相邻两点时间间隔达到该值即断开，默认 60">
         <span class="muted">分钟</span>
         <span class="sp"></span>
-        <span class="muted mono" id="histState">--</span>
+        <span class="muted mono" id="histState" title="gps.txt 已加载的点数 / 行数 / 加载时间">--</span>
       </div>
       <div class="row">
-        <span class="muted">gps.txt 末尾</span>
-        <input type="number" id="lines" min="1" max="5000" step="10">
+        <span class="muted" title="从 /sdcard/Alarms/gps.txt 末尾读取多少条记录">gps.txt 末尾</span>
+        <input type="number" id="lines" min="1" max="5000" step="10"
+               title="读取末尾行数：点右侧按钮才生效，默认 100 行">
         <span class="muted">行</span>
         <span class="sp"></span>
-        <button id="btnHist">刷新 gps.txt</button>
+        <button id="btnHist" title="重新从手机读取 gps.txt（快捷键 Shift+R）；自动刷新不会重读">刷新 gps.txt<span class="kbd">⇧R</span></button>
       </div>
       <div class="row">
-        <label class="chk"><input type="checkbox" id="showHist" checked> 显示历史轨迹</label>
-        <label class="chk"><input type="checkbox" id="showRaw"> 未校正点</label>
+        <label class="chk" title="显示 / 隐藏 gps.txt 历史轨迹（快捷键 H）"><input type="checkbox" id="showHist" checked> 显示历史轨迹</label>
+        <label class="chk" title="同时显示未做 GCJ-02 校正的原始 WGS-84 点位"><input type="checkbox" id="showRaw"> 未校正点</label>
         <span class="sp"></span>
-        <button id="segAll" style="padding:2px 8px;font-size:11px">全选</button>
+        <button id="segAll" style="padding:2px 8px;font-size:11px" title="一次勾选 / 取消勾选所有路线段">全选</button>
       </div>
       <div class="row lbl-cfg">
-        <span class="muted">时间标签</span>
-        <input type="range" id="lblSize" min="8" max="20" step="1">
+        <span class="muted" title="历史点上方时间标签的样式">时间标签</span>
+        <input type="range" id="lblSize" min="8" max="20" step="1" title="标签字号 8–20 px">
         <span class="muted mono" id="lblSizeVal"></span>
-        <label class="chk" title="文字颜色">字<input type="color" id="lblColor"></label>
-        <label class="chk" title="背景颜色">底<input type="color" id="lblBg"></label>
-        <label class="chk" title="显示背景"><input type="checkbox" id="lblBgOn">背景</label>
+        <label class="chk" title="文字颜色"><span title="文字颜色">字</span><input type="color" id="lblColor" title="时间标签文字颜色"></label>
+        <label class="chk" title="背景颜色"><span title="背景颜色">底</span><input type="color" id="lblBg" title="时间标签背景颜色"></label>
+        <label class="chk" title="打开后时间标签带背景色，关闭为透明"><input type="checkbox" id="lblBgOn">背景</label>
       </div>
     </div>
     <div class="card">
@@ -164,6 +171,12 @@
     </div>
     <div class="card">
       <h2>地图瓦片缓存 <span class="badge" id="tileState">--</span></h2>
+      <div class="row" style="margin:0 0 6px">
+        <span class="muted">有效期</span>
+        <input type="number" id="tileDays" min="0" max="3650" step="1"
+               title="磁盘瓦片有效期（天）：0 = 永不过期；超过后该瓦片下次请求会重新下载">
+        <span class="muted">天（0=永不过期）</span>
+      </div>
       <dl class="kv" id="tileKv"></dl>
       <table style="margin-top:6px">
         <thead><tr><th>层级</th><th>张数</th><th>大小</th></tr></thead>
@@ -193,7 +206,7 @@ function initMap(){
   map = L.map('map', {zoomControl:true, attributionControl:true}).setView([28.26,112.95], 14);
   // 走本地代理：/tile(p) 首次回源并落盘，之后读盘秒出（含 30 天 Cache-Control）
   L.tileLayer('/tile(p)?z={z}&x={x}&y={y}',
-    {maxZoom:18, attribution:'底图 © 高德地图 (GCJ-02) · 本地缓存'}).addTo(map);
+    {maxZoom:18, attribution:'高德地图(GCJ-02)'}).addTo(map);
   layerMi = L.layerGroup().addTo(map);
   layerMq = L.layerGroup().addTo(map);
   layerRaw = L.layerGroup();
@@ -221,6 +234,13 @@ function arrowIcon(deg, color){
 }
 
 function fmt(v, n=6){ return (v==null||isNaN(v)) ? '--' : Number(v).toFixed(n); }
+// Android 进程重要性（RunningAppProcessInfo.IMPORTANCE_*）：≥200 基本等于后台，拿不到定位
+const IMPORTANCE = {100:'前台', 125:'前台服务', 150:'可感知', 200:'后台服务', 230:'后台',
+  250:'空进程', 300:'已缓存(后台)', 325:'服务(后台)', 400:'已缓存'};
+function importanceText(v){
+  const t = IMPORTANCE[v];
+  return t ? `${t}（importance=${v}）` : `importance=${v}`;
+}
 function esc(s){ return String(s==null?'':s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 function fmtBytes(n){
   const u = ['B','KB','MB','GB']; let v = Number(n||0), i = 0;
@@ -233,7 +253,7 @@ function kv(el, rows){ el.innerHTML = rows.map(([k,v])=>`<dt>${k}</dt><dd>${v}</
 const PAL = ['#38d39f','#3d9bff','#f0b429','#ff6b6b','#b06cff','#00c2c7','#ff8a3d','#8fbf3f'];
 let LAST = null;
 // 设置：设备位置刷新间隔 / 分段间隔 / gps.txt 末尾行数
-const S = {refreshSec: 10, gapMin: 60, lines: 100};
+const S = {refreshSec: 10, gapMin: 60, lines: 100, tileDays: 0};
 
 function hiddenSet(){
   try { return new Set(JSON.parse(localStorage.getItem('mi_gps_hidden') || '[]')); }
@@ -258,6 +278,7 @@ function shortTime(t){ return (t || '').slice(5, 16); }
 function buildSegList(segs, hidden, hist){
   $('segState').textContent = segs.length ? segs.length + ' 段' : '0 段';
   $('segAll').textContent = hidden.size ? '全选' : '全不选';
+  $('segAll').title = hidden.size ? '勾选并显示所有路线段' : '取消勾选所有路线段（地图上隐藏）';
   const st = $('histState');
   if (hist.error){
     st.innerHTML = `<span class="err">gps.txt 读取失败</span>`;
@@ -345,6 +366,10 @@ function render(d){
   const ms = $('miState');
   ms.textContent = mi.disabled ? '未加载' : (mi.ok ? (mi.online?'在线':'离线') : '失败');
   ms.className = 'badge ' + (mi.disabled ? '' : (mi.ok ? (mi.online?'on':'off') : 'off'));
+  ms.title = mi.disabled
+    ? '启动时没加 --mi，未请求小米云；用 gps_map.py --mi 可开启对比'
+    : (mi.ok ? `小米云设备「${mi.name}」· ${mi.online?'在线':'离线'} · 更新 ${mi.updated||'--'}`
+             : `小米云读取失败：${mi.error||'未知'}`);
   if (mi.ok){
     kv($('miKv'), [
       ['设备', esc(mi.name)],
@@ -370,6 +395,10 @@ function render(d){
   const ageMin = mq.age_sec == null ? null : Math.round(mq.age_sec / 60);
   qs.textContent = mq.ok ? (isLive ? '实时' : (stale ? `滞后 ${ageMin} 分钟` : '日志')) : '失败';
   qs.className = 'badge ' + (mq.ok ? ((isLive || !stale) ? 'on' : 'off') : 'off');
+  qs.title = mq.ok
+    ? (isLive ? `实时定位：来源 ${mq.provider||'--'}，采集于 ${mq.log_time||'--'}`
+              : `gps.txt 日志点：记录于 ${mq.log_time||'--'}${ageMin==null?'':`（${ageMin} 分钟前）`}`)
+    : `MQTT 读取失败：${mq.error||mq.live_error||'未知'}`;
   if (mq.ok){
     kv($('mqKv'), [
       ['topic', esc(d.topic)],
@@ -383,7 +412,23 @@ function render(d){
       ['历史点', `${((d.history&&d.history.points)||[]).length} 条${d.history&&d.history.error?'（读取失败）':''}`],
     ]);
   } else {
-    kv($('mqKv'), [['错误', `<span class="err">${esc(mq.error||'未知')}</span>`]]);
+    // 失败时把手机端诊断一起显示：Android 10+ 后台进程即便有前台定位权限也拿不到位置，
+    // 只回一句「没有可用的 last known location」看不出原因。
+    const dg = mq.diag || {};
+    const rows = [['错误', `<span class="err">${esc(mq.error||'未知')}</span>`]];
+    if (dg.importance != null)
+      rows.push(['进程状态', esc(importanceText(dg.importance))]);
+    if (dg.fine != null || dg.coarse != null)
+      rows.push(['定位权限', dg.fine ? '前台已授权' : (dg.coarse ? '仅粗略定位' : '<span class="err">未授权</span>')]);
+    if (dg.background != null)
+      rows.push(['后台定位', dg.background ? '已授权' : '<span class="warn">未授权</span>']);
+    if (dg.location_enabled != null)
+      rows.push(['系统定位开关', dg.location_enabled ? '开' : '<span class="err">关</span>']);
+    const provs = dg.providers || {};
+    const provKeys = Object.keys(provs);
+    if (provKeys.length)
+      rows.push(['可用 provider', esc(provKeys.filter(k=>provs[k]).join(' / ') || '无')]);
+    kv($('mqKv'), rows);
   }
 
   if (dl.raw_m != null){
@@ -480,7 +525,10 @@ function render(d){
   }
 }
 
+let refreshing = false;
 async function refresh(){
+  if (refreshing) return;          // 连按快捷键/自动刷新重叠时只跑一次
+  refreshing = true;
   try{
     const r = await fetch('/data_json(p)?t=' + Date.now(), {cache:'no-store'});
     if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -488,6 +536,8 @@ async function refresh(){
     render(d);
   }catch(e){
     $('conn').innerHTML = `<span class="dot err"></span>连接失败：${esc(e.message)}`;
+  }finally{
+    refreshing = false;
   }
   $('clock').textContent = new Date().toLocaleTimeString('zh-CN', {hour12:false});
 }
@@ -538,16 +588,18 @@ function loadS(){
   S.refreshSec = clampInt(S.refreshSec, 3, 600, 10);
   S.gapMin = clampInt(S.gapMin, 1, 1440, 60);
   S.lines = clampInt(S.lines, 1, 5000, 100);
+  S.tileDays = clampInt(S.tileDays, 0, 3650, 0);
   $('refreshSec').value = S.refreshSec;
   $('gapMin').value = S.gapMin;
   $('lines').value = S.lines;
+  $('tileDays').value = S.tileDays;
 }
 function saveS(){ localStorage.setItem(S_KEY, JSON.stringify(S)); }
 
 // gps.txt 不随自动刷新重读：只有启动和点「刷新 gps.txt」才回手机取
 async function reloadHist(){
   const btn = $('btnHist');
-  const old = btn.textContent;
+  const old = btn.innerHTML;               // 保留按钮里的快捷键角标
   btn.disabled = true; btn.textContent = '加载中…';
   try{
     const r = await fetch('/reload_hist(p)?lines=' + S.lines, {cache:'no-store'});
@@ -557,8 +609,15 @@ async function reloadHist(){
   }catch(e){
     $('histState').innerHTML = `<span class="err">${esc(e.message)}</span>`;
   }finally{
-    btn.disabled = false; btn.textContent = old;
+    btn.disabled = false; btn.innerHTML = old;
   }
+}
+
+// 把面板里的瓦片有效期同步给服务端（服务端据此判断磁盘瓦片是否过期）
+async function pushTileDays(){
+  try{
+    await fetch('/tile_cfg(p)?days=' + S.tileDays, {cache:'no-store'});
+  }catch(e){ /* 同步失败只影响过期判定，不阻塞页面 */ }
 }
 
 let timer = null;
@@ -569,6 +628,7 @@ function schedule(){
 
 loadS();
 initMap();
+pushTileDays();
 $('btn').onclick = refresh;
 $('btnHist').onclick = reloadHist;
 $('showRaw').onchange = refresh;
@@ -586,6 +646,12 @@ $('lines').onchange = e => {
   S.lines = clampInt(e.target.value, 1, 5000, 100);
   e.target.value = S.lines; saveS();
 };
+$('tileDays').onchange = async e => {
+  S.tileDays = clampInt(e.target.value, 0, 3650, 0);
+  e.target.value = S.tileDays; saveS();
+  await pushTileDays();
+  refresh();
+};
 $('segAll').onclick = () => {
   if (!LAST) return;
   const hp = ((LAST.history || {}).points || []).filter(p => p && p.gcj);
@@ -594,13 +660,38 @@ $('segAll').onclick = () => {
   saveHidden(hidden.size ? new Set() : new Set(segs.map(segKey)));
   drawHist(LAST);
 };
-$('fold').onclick = () => {
+function toggleFold(){
   const folded = document.body.classList.toggle('folded');
   const btn = $('fold');
   btn.textContent = folded ? '\u2039' : '\u203A';
-  btn.title = folded ? '展开信息栏' : '收起信息栏';
+  btn.title = (folded ? '展开信息栏' : '收起信息栏') + ' (\\)';
   setTimeout(() => map.invalidateSize(), 200);
-};
+}
+$('fold').onclick = toggleFold;
+
+// 快捷键：R 立即刷新 · Shift+R 刷新 gps.txt · H 历史轨迹开关 · \ 收起/展开侧栏
+// 输入框内不拦截；带 Ctrl/Alt/Meta 的组合一律放行给浏览器
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey || e.altKey || e.metaKey) return;
+  const t = e.target;
+  if (t && t.closest && t.closest('input,select,textarea,[contenteditable]')) return;
+  const k = e.key;
+  if (k === 'r' || k === 'R'){
+    e.preventDefault();
+    if (e.shiftKey) reloadHist(); else refresh();
+    return;
+  }
+  if (e.shiftKey) return;
+  if (k === 'h' || k === 'H'){
+    e.preventDefault();
+    const cb = $('showHist');
+    cb.checked = !cb.checked;
+    refresh();
+  } else if (k === '\\'){
+    e.preventDefault();
+    toggleFold();
+  }
+});
 refresh().then(schedule);
 </script>
 </body>

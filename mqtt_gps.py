@@ -31,13 +31,63 @@ _TOTAL = re.compile(r"distance_total_m=(-?\d+(?:\.\d+)?)")
 
 _cache = {"ts": 0.0, "key": None, "data": None}
 
-# 手机端实时定位：直接问 Android LocationManager 要 last known location
-# （运行在 com.qgb.xime 的 Python 环境里，appctx 是当前 Application Context）
+# 手机端实时定位：直接问 Android LocationManager 要 last known location。
+# Application Context 可能来自 appctx（宿主注入过才有），也可能是 App 重启后
+# appctx 不在 RPC 命名空间里——此时用 Chaquopy 官方入口拿 Application。
+#
+# 顺带把「为什么拿不到」的诊断一起回传：Android 10+ 后台进程没有定位访问权
+# （ACCESS_BACKGROUND_LOCATION 未授予且进程不在前台时，任何 provider 的
+# getLastKnownLocation 都返回 null），这类原因必须显式告诉页面，不能只说
+# 「手机没有可用的 last known location」。
 LIVE_CODE = r"""
 import json
-lm = appctx.getSystemService('location')
+try:
+    ctx = appctx
+except NameError:
+    from com.chaquo.python import Python
+    ctx = Python.getPlatform().getApplication()
+
+pkg = ctx.getPackageName()
+diag = {'pkg': pkg}
+
+def _perm(name):
+    try:
+        return ctx.getPackageManager().checkPermission(name, pkg) == 0
+    except Exception:
+        return None
+
+diag['fine'] = _perm('android.permission.ACCESS_FINE_LOCATION')
+diag['coarse'] = _perm('android.permission.ACCESS_COARSE_LOCATION')
+diag['background'] = _perm('android.permission.ACCESS_BACKGROUND_LOCATION')
+
+lm = ctx.getSystemService('location')
+try:
+    diag['location_enabled'] = bool(lm.isLocationEnabled())
+except Exception:
+    diag['location_enabled'] = None
+
+providers = {}
+for _p in ('gps', 'network', 'passive', 'fused'):
+    try:
+        providers[_p] = bool(lm.isProviderEnabled(_p))
+    except Exception:
+        providers[_p] = None
+diag['providers'] = providers
+
+try:
+    am = ctx.getSystemService('activity')
+    procs = am.getRunningAppProcesses()
+    imp = None
+    for _i in range(procs.size()):
+        _pi = procs.get(_i)
+        if _pi.processName == pkg:
+            imp = _pi.importance
+    diag['importance'] = imp
+except Exception:
+    diag['importance'] = None
+
 best = None
-for prov in ('gps', 'network', 'fused', 'passive'):
+for prov in ('fused', 'gps', 'network', 'passive'):
     try:
         loc = lm.getLastKnownLocation(prov)
     except Exception:
@@ -48,8 +98,56 @@ for prov in ('gps', 'network', 'fused', 'passive'):
             'acc': loc.getAccuracy(), 'ts': loc.getTime()}
     if best is None or item['ts'] > best['ts']:
         best = item
-print(json.dumps(best))
+print(json.dumps({'loc': best, 'diag': diag}))
 """
+
+# 进程重要性 -> 中文（Android ActivityManager.RunningAppProcessInfo.IMPORTANCE_*）
+_IMPORTANCE_TEXT = {
+    100: "前台（可见）",
+    125: "前台服务",
+    150: "可感知",
+    200: "后台服务",
+    230: "后台",
+    250: "空进程",
+    300: "已缓存（后台）",
+    325: "服务（后台）",
+    400: "已缓存",
+}
+
+_last_probe = {"diag": None}
+
+
+def last_probe_diag():
+    """最近一次实时定位探测到的手机端诊断信息（页面展示用，可能为 None）。"""
+    return _last_probe.get("diag")
+
+
+def _diag_reason(diag):
+    """把手机端诊断拼成一句人能看懂的原因 + 处理建议。"""
+    if not isinstance(diag, dict):
+        return "手机端没有返回定位诊断信息"
+    bits = []
+    imp = diag.get("importance")
+    imp_text = _IMPORTANCE_TEXT.get(imp, "未知(%s)" % imp if imp is not None else "未知")
+    bits.append("进程状态 %s" % imp_text)
+    if diag.get("fine") is False and diag.get("coarse") is False:
+        bits.append("前台定位权限未授予")
+    elif diag.get("background") is False:
+        bits.append("后台定位权限未授予（ACCESS_BACKGROUND_LOCATION）")
+    if diag.get("location_enabled") is False:
+        bits.append("系统定位开关已关闭")
+    provs = diag.get("providers") or {}
+    opened = [k for k, v in provs.items() if v]
+    if opened:
+        bits.append("可用 provider %s" % "/".join(opened))
+    reason = "手机端拿不到任何 last known location：" + "，".join(bits)
+    if imp is not None and imp >= 200 and diag.get("background") is False:
+        reason += ("。Android 10+ 的定位访问按进程状态收紧：后台进程即使有前台定位权限也拿不到位置。"
+                   "处理：设置→应用→Xime→权限→位置 改为「始终允许」，或弹起 Xime 键盘/打开 App 让其回到前台")
+    elif diag.get("location_enabled") is False:
+        reason += "。处理：打开系统「位置信息」开关"
+    return reason
+
 
 
 def _read_tail_code(lines=400):
@@ -130,11 +228,27 @@ def _rpc_text(code, topic, timeout, key, prefer_stdout=False):
     raise RuntimeError("手机端没有返回结果")
 
 
+def _short_err(text):
+    """错误串只留最后一行有用信息（RPC 回包里的多行 traceback 太长，页面放不下）。"""
+    text = str(text).strip()
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return lines[-1] if lines else text
+
+
 def live(topic, key, timeout=8):
     """实时定位：LocationManager.getLastKnownLocation（WGS-84）。"""
-    item = json.loads(_rpc_text(LIVE_CODE, topic, timeout, key, prefer_stdout=True))
+    raw = _rpc_text(LIVE_CODE, topic, timeout, key, prefer_stdout=True)
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        raise RuntimeError("手机端返回的不是 JSON：%s" % _short_err(raw)[:200])
+    if isinstance(data, dict) and "loc" in data:
+        item, diag = data.get("loc"), data.get("diag")
+    else:                      # 兼容旧版只回传 location 的格式
+        item, diag = data, None
+    _last_probe["diag"] = diag
     if not isinstance(item, dict) or item.get("lat") is None or item.get("lng") is None:
-        raise RuntimeError("手机没有可用的 last known location")
+        raise RuntimeError(_diag_reason(diag))
     ts = item.get("ts")
     ts = ts / 1000.0 if ts else None
     return {
@@ -162,13 +276,22 @@ def latest(topic, key, timeout=8, use_cache=True, cache_sec=5, prefer_live=True)
         try:
             point = live(topic, key, timeout=timeout)
         except Exception as exc:  # 实时定位不可用只降级到日志，不影响页面
-            live_err = "%s: %s" % (type(exc).__name__, exc)
+            # 自家 RuntimeError 的面板文案已经是中文整句，不再重复类名
+            live_err = str(exc) if isinstance(exc, RuntimeError) else \
+                "%s: %s" % (type(exc).__name__, exc)
 
     if point is None:
-        res = _rpc_text(_read_tail_code(), topic, timeout, key)
-        point = parse_gps_text(res)
-        if not point:
-            raise RuntimeError("gps.txt 里没有可用的 lat/lon 记录")
+        try:
+            res = _rpc_text(_read_tail_code(), topic, timeout, key)
+            point = parse_gps_text(res)
+            if not point:
+                raise RuntimeError("文件里没有可用的 lat/lon 记录")
+        except Exception as exc:  # 两路都失败：把真实原因一起报出来，别让文件错误盖住定位原因
+            log_err = _short_err("%s: %s" % (type(exc).__name__, exc))
+            if live_err:
+                raise RuntimeError("实时定位失败：%s；gps.txt(%s) 兜底也失败：%s"
+                                   % (_short_err(live_err), GPS_FILE, log_err))
+            raise
         point["source"] = "log"
         point["provider"] = None
 

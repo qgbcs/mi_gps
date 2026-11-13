@@ -32,7 +32,8 @@ import server_http  # noqa: E402  (复用 multi_mqtt 的 HTTP RPC 服务器)
 MAP_HTML = os.path.join(HERE, "map.html")
 STATE = {"device": None, "topic": None, "key": None, "timeout": 8.0, "use_mi": False,
          "cache": None, "cache_ts": 0.0, "cache_sec": 5.0,
-         "lines": 100, "hist": None, "hist_ts": 0.0, "hist_error": None}
+         "lines": 100, "hist": None, "hist_ts": 0.0, "hist_error": None,
+         "tile_days": 0}
 _lock = threading.Lock()
 
 # ---- 地图瓦片磁盘缓存 ----
@@ -80,7 +81,8 @@ def build_payload(force=False):
         "topic": STATE["topic"],
         "mi": {"ok": dev is not None, "error": mi_err,
                "disabled": not STATE["use_mi"]},
-        "mqtt": {"ok": mq is not None, "error": mq_err},
+        "mqtt": {"ok": mq is not None, "error": mq_err,
+                 "diag": mqtt_gps.last_probe_diag()},
         "history": {"ok": STATE["hist"] is not None, "error": STATE["hist_error"],
                     "points": STATE["hist"] or [], "lines": STATE["lines"],
                     "loaded_at": _fmt_ms(STATE["hist_ts"] * 1000) if STATE["hist_ts"] else None},
@@ -178,11 +180,21 @@ def _write_tile(z, x, y, buf):
     os.replace(tmp, path)
 
 
+def _tile_fresh(path):
+    """磁盘瓦片是否仍在有效期内；tile_days=0 表示永不过期。"""
+    try:
+        mtime = os.stat(path).st_mtime
+    except OSError:
+        return False
+    days = STATE["tile_days"]
+    return days <= 0 or (time.time() - mtime) < days * 86400
+
+
 def tile(p):
     """瓦片代理 + 本地磁盘缓存：/tile(p)?z=&x=&y=
 
-    命中缓存直接读盘秒出；未命中才回源并落盘。响应带 30 天 Cache-Control，
-    浏览器端第二次也不需要再请求。
+    命中且未过期直接读盘秒出；未命中或过期才回源并落盘。响应缓存头跟随
+    面板设置的 tile_days：0 = 永不过期（一年 + immutable）。
     """
     query = urllib.parse.parse_qs(p.handler.path.partition("?")[2])
     try:
@@ -194,11 +206,15 @@ def tile(p):
         p.set_data(b"")
         return
 
-    try:
-        with open(_tile_file(z, x, y), "rb") as fp:
-            buf, hit = fp.read(), True
-    except OSError:
-        buf, hit = None, False
+    path = _tile_file(z, x, y)
+    hit = False
+    buf = None
+    if _tile_fresh(path):
+        try:
+            with open(path, "rb") as fp:
+                buf, hit = fp.read(), True
+        except OSError:
+            buf, hit = None, False
     if not hit:
         try:
             buf = _fetch_tile(z, x, y)
@@ -210,10 +226,29 @@ def tile(p):
         with _tile_lock:
             _tile_stats["data"] = None   # 有新瓦片落盘，下次统计重新扫描
 
+    days = STATE["tile_days"]
     p.set_header("Content-Type", "image/png")
-    p.set_header("Cache-Control", "public, max-age=2592000")
+    p.set_header("Cache-Control",
+                 "public, max-age=31536000, immutable" if days <= 0
+                 else "public, max-age=%d" % (int(min(days, 365)) * 86400))
     p.set_header("X-Tile-Cache", "hit" if hit else "miss")
     p.set_data(buf)
+
+
+def tile_cfg(p):
+    """设置瓦片缓存有效期：/tile_cfg(p)?days=0（0 = 永不过期）"""
+    query = urllib.parse.parse_qs(p.handler.path.partition("?")[2])
+    try:
+        days = int(query.get("days", [""])[0])
+    except (TypeError, ValueError):
+        days = None
+    if days is not None:
+        with _lock:
+            STATE["tile_days"] = max(0, min(days, 3650))
+            _tile_stats["data"] = None
+    p.set_header("Content-Type", "application/json; charset=utf-8")
+    p.set_header("Cache-Control", "no-store")
+    p.set_data(json.dumps({"ok": True, "days": STATE["tile_days"]}))
 
 
 def _fmt_bytes(n):
@@ -263,7 +298,8 @@ def tile_stats(force=False):
             total += zs
 
     data = {"levels": levels, "count": count, "bytes": total,
-            "bytes_text": _fmt_bytes(total), "dir": TILE_DIR}
+            "bytes_text": _fmt_bytes(total), "dir": TILE_DIR,
+            "days": STATE["tile_days"]}
     with _tile_lock:
         _tile_stats.update(ts=now, data=data)
     return data
